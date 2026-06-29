@@ -44,6 +44,49 @@ App sẽ tự đoán backend theo IP của Expo LAN và port `8787`. Nếu khôn
 http://<IP-may-tinh>:8787
 ```
 
+Khi backend đã deploy lên Render, tạo file `mobile/.env` từ `mobile/.env.example`:
+
+```powershell
+Copy-Item mobile\.env.example mobile\.env
+```
+
+Sửa URL thành service Render thật:
+
+```text
+EXPO_PUBLIC_API_BASE=https://your-render-service.onrender.com
+```
+
+## Deploy lên Render
+
+Repo đã có `render.yaml` để Render Blueprint tự nhận cấu hình.
+
+Render sẽ chạy:
+
+```text
+Build Command: npm install && npm run build
+Start Command: npm run start
+Health Check: /api/health
+```
+
+Backend và web dashboard chạy cùng một service:
+
+- API: `https://<service>.onrender.com/api/state`
+- Web dashboard: `https://<service>.onrender.com/`
+- WebSocket: `wss://<service>.onrender.com/ws`
+
+Lưu ý: bản prototype hiện lưu dữ liệu trong RAM. Render free có thể sleep/restart nên dữ liệu demo sẽ reset. Khi pilot thật nên thêm database như PostgreSQL/Firebase.
+
+## Push GitHub
+
+Không commit PDF/txt trích xuất vì tài liệu có thông tin cá nhân. Repo chỉ đưa code app, backend, mobile và config deploy.
+
+Sau khi tạo repo GitHub, chạy:
+
+```powershell
+git remote add origin https://github.com/<username>/<repo>.git
+git push -u origin main
+```
+
 ## API để ESP32 gửi dữ liệu
 
 `POST http://<server-ip>:8787/api/telemetry`
