@@ -10,6 +10,7 @@
     "dev": "concurrently \"npm:server\" \"npm:client\"",
     "mobile": "npm --prefix mobile start",
     "sim": "node tools/device-simulator.js",
+    "mqtt:sim": "node tools/mqtt-device-simulator.js",
     "build": "vite build",
     "preview": "vite preview --host 0.0.0.0"
   },
@@ -19,6 +20,7 @@
     "cors": "^2.8.5",
     "express": "^5.2.1",
     "lucide-react": "^0.468.0",
+    "mqtt": "^5.15.1",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
     "vite": "^7.2.7",

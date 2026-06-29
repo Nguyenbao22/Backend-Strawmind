@@ -76,6 +76,67 @@ Backend và web dashboard chạy cùng một service:
 
 Lưu ý: bản prototype hiện lưu dữ liệu trong RAM. Render free có thể sleep/restart nên dữ liệu demo sẽ reset. Khi pilot thật nên thêm database như PostgreSQL/Firebase.
 
+## Kết nối HiveMQ Cloud
+
+HiveMQ Cloud cluster dùng MQTT over TLS:
+
+```text
+Host: 3b8fa1f55fa44b14a8def756f361a0c1.s1.eu.hivemq.cloud
+Port: 8883
+```
+
+Trong HiveMQ, vào cluster và tạo credentials cho device/backend. Không commit username/password lên GitHub.
+
+Trên Render, thêm environment variables:
+
+```text
+MQTT_HOST=3b8fa1f55fa44b14a8def756f361a0c1.s1.eu.hivemq.cloud
+MQTT_PORT=8883
+MQTT_TOPIC_PREFIX=strawmind
+MQTT_USERNAME=<username-tren-hivemq>
+MQTT_PASSWORD=<password-tren-hivemq>
+```
+
+Backend sẽ:
+
+- Subscribe telemetry từ ESP32: `strawmind/+/telemetry`
+- Publish lệnh thiết bị: `strawmind/<nodeId>/cmd/<actuator>`
+- Kiểm tra trạng thái MQTT tại: `/api/mqtt`
+
+Payload ESP32 publish lên HiveMQ:
+
+```json
+{
+  "temperature": 29.2,
+  "humidity": 92,
+  "substrateMoisture": 66,
+  "co2": 1100,
+  "battery": 91,
+  "rssi": -58
+}
+```
+
+ESP32 cần subscribe:
+
+```text
+strawmind/bed-01/cmd/+
+```
+
+Lệnh nhận được:
+
+```json
+{ "state": "on" }
+```
+
+Test HiveMQ không cần ESP32:
+
+```powershell
+$env:MQTT_HOST="3b8fa1f55fa44b14a8def756f361a0c1.s1.eu.hivemq.cloud"
+$env:MQTT_USERNAME="<username-tren-hivemq>"
+$env:MQTT_PASSWORD="<password-tren-hivemq>"
+npm.cmd run mqtt:sim
+```
+
 ## Push GitHub
 
 Không commit PDF/txt trích xuất vì tài liệu có thông tin cá nhân. Repo chỉ đưa code app, backend, mobile và config deploy.

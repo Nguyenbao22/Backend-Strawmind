@@ -1,5 +1,6 @@
 import cors from 'cors';
 import express from 'express';
+import mqtt from 'mqtt';
 import { WebSocketServer } from 'ws';
 import { createServer } from 'node:http';
 import { dirname, join } from 'node:path';
@@ -7,8 +8,23 @@ import { fileURLToPath } from 'node:url';
 
 const PORT = Number(process.env.PORT || 8787);
 const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN || '*';
+const MQTT_HOST = process.env.MQTT_HOST || '';
+const MQTT_PORT = Number(process.env.MQTT_PORT || 8883);
+const MQTT_USERNAME = process.env.MQTT_USERNAME || '';
+const MQTT_PASSWORD = process.env.MQTT_PASSWORD || '';
+const MQTT_TOPIC_PREFIX = process.env.MQTT_TOPIC_PREFIX || 'strawmind';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const distPath = join(__dirname, '..', 'dist');
+const mqttStatus = {
+  enabled: Boolean(MQTT_HOST && MQTT_USERNAME && MQTT_PASSWORD),
+  connected: false,
+  host: MQTT_HOST,
+  port: MQTT_PORT,
+  topicPrefix: MQTT_TOPIC_PREFIX,
+  lastError: null,
+  lastMessageAt: null,
+};
+let mqttClient = null;
 
 const STAGE_RANGES = {
   incubation: {
@@ -138,6 +154,37 @@ function publicState() {
   };
 }
 
+function parseTelemetry(payload = {}) {
+  const reading = {
+    nodeId: String(payload.nodeId || state.metrics.nodeId),
+    temperature: Number(payload.temperature),
+    humidity: Number(payload.humidity),
+    substrateMoisture: Number(payload.substrateMoisture),
+    co2: Number(payload.co2),
+    battery: payload.battery === undefined ? state.metrics.battery : Number(payload.battery),
+    rssi: payload.rssi === undefined ? state.metrics.rssi : Number(payload.rssi),
+    receivedAt: nowIso(),
+  };
+
+  for (const key of ['temperature', 'humidity', 'substrateMoisture', 'co2']) {
+    if (!Number.isFinite(reading[key])) {
+      throw new Error(`Missing or invalid metric: ${key}`);
+    }
+  }
+
+  return reading;
+}
+
+function applyTelemetry(payload) {
+  const reading = parseTelemetry(payload);
+  state.metrics = reading;
+  state.lastUpdated = reading.receivedAt;
+  state.readings = [reading, ...state.readings].slice(0, 120);
+  evaluateAlerts(reading);
+  broadcast('telemetry.updated');
+  return reading;
+}
+
 function broadcast(event, payload = publicState()) {
   const data = JSON.stringify({ event, payload, sentAt: nowIso() });
   for (const client of wss.clients) {
@@ -145,6 +192,74 @@ function broadcast(event, payload = publicState()) {
       client.send(data);
     }
   }
+}
+
+function publishMqttCommand(command) {
+  if (!mqttClient || !mqttStatus.connected) return false;
+  mqttClient.publish(command.topic, JSON.stringify(command.payload), { qos: 1 }, (error) => {
+    if (error) {
+      mqttStatus.lastError = error.message;
+      console.error('[mqtt] publish failed:', error.message);
+    }
+  });
+  return true;
+}
+
+function initMqttBridge() {
+  if (!mqttStatus.enabled) {
+    console.log('[mqtt] disabled. Set MQTT_HOST, MQTT_USERNAME and MQTT_PASSWORD to enable HiveMQ.');
+    return;
+  }
+
+  const url = `mqtts://${MQTT_HOST}:${MQTT_PORT}`;
+  mqttClient = mqtt.connect(url, {
+    username: MQTT_USERNAME,
+    password: MQTT_PASSWORD,
+    clientId: `strawmind-backend-${Math.random().toString(16).slice(2)}`,
+    clean: true,
+    reconnectPeriod: 5000,
+    connectTimeout: 15000,
+  });
+
+  mqttClient.on('connect', () => {
+    mqttStatus.connected = true;
+    mqttStatus.lastError = null;
+    const telemetryTopic = `${MQTT_TOPIC_PREFIX}/+/telemetry`;
+    mqttClient.subscribe(telemetryTopic, { qos: 1 }, (error) => {
+      if (error) {
+        mqttStatus.lastError = error.message;
+        console.error('[mqtt] subscribe failed:', error.message);
+        return;
+      }
+      console.log(`[mqtt] connected to ${MQTT_HOST}, subscribed ${telemetryTopic}`);
+    });
+  });
+
+  mqttClient.on('reconnect', () => {
+    mqttStatus.connected = false;
+  });
+
+  mqttClient.on('close', () => {
+    mqttStatus.connected = false;
+  });
+
+  mqttClient.on('error', (error) => {
+    mqttStatus.connected = false;
+    mqttStatus.lastError = error.message;
+    console.error('[mqtt] error:', error.message);
+  });
+
+  mqttClient.on('message', (topic, buffer) => {
+    try {
+      const payload = JSON.parse(buffer.toString());
+      const [, nodeId] = topic.split('/');
+      applyTelemetry({ nodeId, ...payload });
+      mqttStatus.lastMessageAt = nowIso();
+    } catch (error) {
+      mqttStatus.lastError = error.message;
+      console.error('[mqtt] invalid telemetry:', error.message);
+    }
+  });
 }
 
 const app = express();
@@ -159,6 +274,10 @@ app.get('/api/state', (_req, res) => {
   res.json(publicState());
 });
 
+app.get('/api/mqtt', (_req, res) => {
+  res.json(mqttStatus);
+});
+
 app.post('/api/stage', (req, res) => {
   const { stage } = req.body;
   if (!STAGE_RANGES[stage]) {
@@ -171,29 +290,12 @@ app.post('/api/stage', (req, res) => {
 });
 
 app.post('/api/telemetry', (req, res) => {
-  const reading = {
-    nodeId: String(req.body.nodeId || state.metrics.nodeId),
-    temperature: Number(req.body.temperature),
-    humidity: Number(req.body.humidity),
-    substrateMoisture: Number(req.body.substrateMoisture),
-    co2: Number(req.body.co2),
-    battery: req.body.battery === undefined ? state.metrics.battery : Number(req.body.battery),
-    rssi: req.body.rssi === undefined ? state.metrics.rssi : Number(req.body.rssi),
-    receivedAt: nowIso(),
-  };
-
-  for (const key of ['temperature', 'humidity', 'substrateMoisture', 'co2']) {
-    if (!Number.isFinite(reading[key])) {
-      return res.status(400).json({ error: `Missing or invalid metric: ${key}` });
-    }
+  try {
+    applyTelemetry(req.body);
+    return res.status(201).json({ ok: true, state: publicState() });
+  } catch (error) {
+    return res.status(400).json({ error: error.message });
   }
-
-  state.metrics = reading;
-  state.lastUpdated = reading.receivedAt;
-  state.readings = [reading, ...state.readings].slice(0, 120);
-  evaluateAlerts(reading);
-  broadcast('telemetry.updated');
-  return res.status(201).json({ ok: true, state: publicState() });
 });
 
 app.post('/api/actuators/:id', (req, res) => {
@@ -216,13 +318,14 @@ app.post('/api/actuators/:id', (req, res) => {
     actuatorId: id,
     state: nextState,
     mode: actuator.mode,
-    topic: `strawmind/bed-01/cmd/${id}`,
+    topic: `${MQTT_TOPIC_PREFIX}/${state.metrics.nodeId}/cmd/${id}`,
     payload: { state: nextState },
     createdAt: actuator.lastChanged,
   };
   state.commands = [command, ...state.commands].slice(0, 50);
+  const mqttPublished = publishMqttCommand(command);
   broadcast('actuator.updated');
-  return res.json({ ok: true, command, state: publicState() });
+  return res.json({ ok: true, command, mqttPublished, state: publicState() });
 });
 
 app.use(express.static(distPath));
@@ -237,6 +340,8 @@ const wss = new WebSocketServer({ server, path: '/ws' });
 wss.on('connection', (socket) => {
   socket.send(JSON.stringify({ event: 'state.snapshot', payload: publicState(), sentAt: nowIso() }));
 });
+
+initMqttBridge();
 
 server.listen(PORT, () => {
   console.log(`StrawMind backend listening on http://localhost:${PORT}`);

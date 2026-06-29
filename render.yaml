@@ -11,3 +11,13 @@ services:
         value: 24.15.0
       - key: CLIENT_ORIGIN
         value: "*"
+      - key: MQTT_HOST
+        value: 3b8fa1f55fa44b14a8def756f361a0c1.s1.eu.hivemq.cloud
+      - key: MQTT_PORT
+        value: 8883
+      - key: MQTT_TOPIC_PREFIX
+        value: strawmind
+      - key: MQTT_USERNAME
+        sync: false
+      - key: MQTT_PASSWORD
+        sync: false
