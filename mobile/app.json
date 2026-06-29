@@ -1,0 +1,31 @@
+{
+  "expo": {
+    "name": "StrawMind",
+    "slug": "strawmind-mobile",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "scheme": "strawmind",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#f4f0e6"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.strawmind.mobile"
+    },
+    "android": {
+      "package": "com.strawmind.mobile",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#1e4d3a"
+      },
+      "permissions": [
+        "POST_NOTIFICATIONS"
+      ]
+    }
+  }
+}
