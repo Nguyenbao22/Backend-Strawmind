@@ -1,6 +1,7 @@
 import cors from 'cors';
 import express from 'express';
 import mqtt from 'mqtt';
+import { createClient } from '@supabase/supabase-js';
 import { WebSocketServer } from 'ws';
 import { createServer } from 'node:http';
 import { dirname, join } from 'node:path';
@@ -13,8 +14,21 @@ const MQTT_PORT = Number(process.env.MQTT_PORT || 8883);
 const MQTT_USERNAME = process.env.MQTT_USERNAME || '';
 const MQTT_PASSWORD = process.env.MQTT_PASSWORD || '';
 const MQTT_TOPIC_PREFIX = process.env.MQTT_TOPIC_PREFIX || 'strawmind';
+const SUPABASE_URL = process.env.SUPABASE_URL || '';
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const distPath = join(__dirname, '..', 'dist');
+const supabaseStatus = {
+  enabled: Boolean(SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY),
+  url: SUPABASE_URL,
+  lastError: null,
+  lastWriteAt: null,
+};
+const supabase = supabaseStatus.enabled
+  ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    })
+  : null;
 const mqttStatus = {
   enabled: Boolean(MQTT_HOST && MQTT_USERNAME && MQTT_PASSWORD),
   connected: false,
@@ -25,6 +39,7 @@ const mqttStatus = {
   lastMessageAt: null,
 };
 let mqttClient = null;
+const deviceIdCache = new Map();
 
 const STAGE_RANGES = {
   incubation: {
@@ -144,6 +159,7 @@ function evaluateAlerts(metrics) {
   });
 
   state.alerts = [...fresh, ...state.alerts].slice(0, 50);
+  return fresh;
 }
 
 function publicState() {
@@ -180,9 +196,110 @@ function applyTelemetry(payload) {
   state.metrics = reading;
   state.lastUpdated = reading.receivedAt;
   state.readings = [reading, ...state.readings].slice(0, 120);
-  evaluateAlerts(reading);
+  const newAlerts = evaluateAlerts(reading);
+  persistTelemetry(reading, newAlerts).catch((error) => {
+    supabaseStatus.lastError = error.message;
+    console.error('[supabase] telemetry write failed:', error.message);
+  });
   broadcast('telemetry.updated');
   return reading;
+}
+
+async function getOrCreateDevice(nodeId) {
+  if (!supabase) return null;
+  if (deviceIdCache.has(nodeId)) return deviceIdCache.get(nodeId);
+
+  const { data: existing, error: selectError } = await supabase
+    .from('devices')
+    .select('id')
+    .eq('device_code', nodeId)
+    .maybeSingle();
+
+  if (selectError) throw selectError;
+  if (existing?.id) {
+    deviceIdCache.set(nodeId, existing.id);
+    return existing.id;
+  }
+
+  const { data: created, error: insertError } = await supabase
+    .from('devices')
+    .insert({
+      device_code: nodeId,
+      name: nodeId,
+      type: 'iot_node',
+      status: 'online',
+      last_seen_at: nowIso(),
+    })
+    .select('id')
+    .single();
+
+  if (insertError) throw insertError;
+  deviceIdCache.set(nodeId, created.id);
+  return created.id;
+}
+
+async function persistTelemetry(reading, newAlerts = []) {
+  if (!supabase) return;
+
+  const deviceId = await getOrCreateDevice(reading.nodeId);
+  const seenAt = reading.receivedAt;
+
+  const { error: deviceError } = await supabase
+    .from('devices')
+    .update({ status: 'online', last_seen_at: seenAt })
+    .eq('id', deviceId);
+
+  if (deviceError) throw deviceError;
+
+  const { error: logError } = await supabase.from('sensor_logs').insert({
+    device_id: deviceId,
+    temperature: reading.temperature,
+    humidity: reading.humidity,
+    co2: reading.co2,
+    soil_moisture: reading.substrateMoisture,
+    created_at: seenAt,
+  });
+
+  if (logError) throw logError;
+
+  if (newAlerts.length) {
+    const { error: alertError } = await supabase.from('alerts').insert(
+      newAlerts.map((alert) => ({
+        device_id: deviceId,
+        alert_type: alert.metric,
+        message: `${alert.title}: ${alert.message}`,
+        severity: alert.severity,
+        created_at: alert.createdAt,
+      })),
+    );
+
+    if (alertError) throw alertError;
+  }
+
+  supabaseStatus.lastError = null;
+  supabaseStatus.lastWriteAt = nowIso();
+}
+
+async function persistCommand(command) {
+  if (!supabase) return;
+
+  const deviceId = await getOrCreateDevice(state.metrics.nodeId);
+  const { error } = await supabase.from('device_commands').insert({
+    device_id: deviceId,
+    command: command.actuatorId,
+    payload: {
+      state: command.state,
+      mode: command.mode,
+      topic: command.topic,
+      mqttPublished: command.mqttPublished,
+    },
+    status: command.mqttPublished ? 'published' : 'pending',
+    created_at: command.createdAt,
+  });
+
+  if (error) throw error;
+  supabaseStatus.lastError = null;
+  supabaseStatus.lastWriteAt = nowIso();
 }
 
 function broadcast(event, payload = publicState()) {
@@ -278,6 +395,13 @@ app.get('/api/mqtt', (_req, res) => {
   res.json(mqttStatus);
 });
 
+app.get('/api/supabase', (_req, res) => {
+  res.json({
+    ...supabaseStatus,
+    serviceRoleConfigured: Boolean(SUPABASE_SERVICE_ROLE_KEY),
+  });
+});
+
 app.post('/api/stage', (req, res) => {
   const { stage } = req.body;
   if (!STAGE_RANGES[stage]) {
@@ -324,6 +448,11 @@ app.post('/api/actuators/:id', (req, res) => {
   };
   state.commands = [command, ...state.commands].slice(0, 50);
   const mqttPublished = publishMqttCommand(command);
+  command.mqttPublished = mqttPublished;
+  persistCommand(command).catch((error) => {
+    supabaseStatus.lastError = error.message;
+    console.error('[supabase] command write failed:', error.message);
+  });
   broadcast('actuator.updated');
   return res.json({ ok: true, command, mqttPublished, state: publicState() });
 });

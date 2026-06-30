@@ -76,6 +76,55 @@ Backend và web dashboard chạy cùng một service:
 
 Lưu ý: bản prototype hiện lưu dữ liệu trong RAM. Render free có thể sleep/restart nên dữ liệu demo sẽ reset. Khi pilot thật nên thêm database như PostgreSQL/Firebase.
 
+## Kết nối Supabase
+
+Backend có thể ghi telemetry, lệnh điều khiển và cảnh báo vào Supabase. Project URL đang dùng:
+
+```text
+https://srlczwqjhwlsafuvoefu.supabase.co
+```
+
+Trong Supabase Dashboard, mở `SQL Editor`, chạy file:
+
+```text
+supabase_schema.sql
+```
+
+Trên Render, thêm environment variables:
+
+```text
+SUPABASE_URL=https://srlczwqjhwlsafuvoefu.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=<service-role-key-trong-Supabase>
+```
+
+Không đưa `SUPABASE_SERVICE_ROLE_KEY` vào frontend, mobile app, hay GitHub. Key này chỉ để trong backend Render.
+
+Kiểm tra trạng thái Supabase:
+
+```http
+GET /api/supabase
+```
+
+Gửi thử telemetry:
+
+```http
+POST /api/telemetry
+```
+
+```json
+{
+  "nodeId": "bed-01",
+  "temperature": 29.2,
+  "humidity": 92,
+  "substrateMoisture": 66,
+  "co2": 1100,
+  "battery": 91,
+  "rssi": -58
+}
+```
+
+Nếu Supabase đã cấu hình đúng, backend sẽ tự tạo device theo `nodeId`, ghi vào `sensor_logs`, cập nhật `devices.last_seen_at`, và ghi `alerts` nếu chỉ số vượt ngưỡng.
+
 ## Kết nối HiveMQ Cloud
 
 HiveMQ Cloud cluster dùng MQTT over TLS:
