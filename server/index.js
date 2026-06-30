@@ -86,6 +86,17 @@ const state = {
   alerts: [],
   readings: [],
   commands: [],
+  ai: {
+    nodeId: 'bed-01',
+    modelName: 'YOLOv8n',
+    healthyCount: 0,
+    affectedCount: 0,
+    diseaseDetected: false,
+    inferenceTimeMs: null,
+    imageUrl: null,
+    detections: [],
+    lastUpdated: null,
+  },
 };
 
 function nowIso() {
@@ -205,6 +216,77 @@ function applyTelemetry(payload) {
   return reading;
 }
 
+function normalizeDetectionPayload(payload = {}) {
+  const nodeId = String(payload.nodeId || state.metrics.nodeId || 'bed-01');
+  const modelName = String(payload.modelName || payload.model_name || 'YOLOv8n');
+  const rawDetections = Array.isArray(payload.detections)
+    ? payload.detections
+    : Array.isArray(payload.boxes)
+      ? payload.boxes
+      : [];
+
+  const detections = rawDetections.map((item) => {
+    const className = item.className || item.class_name || item.label || item.class || 'Unknown';
+    const confidence = Number(item.confidence ?? item.conf ?? item.score ?? 0);
+    const box = item.bbox || item.box || item.xyxy || null;
+    const bbox = Array.isArray(box)
+      ? { x1: Number(box[0]), y1: Number(box[1]), x2: Number(box[2]), y2: Number(box[3]) }
+      : box;
+
+    return {
+      className: String(className),
+      confidence: Number.isFinite(confidence) ? confidence : 0,
+      bbox,
+    };
+  });
+
+  const healthyCount = Number(
+    payload.healthyCount ?? payload.healthy_count ?? detections.filter((d) => /healthy/i.test(d.className)).length,
+  );
+  const affectedCount = Number(
+    payload.affectedCount ??
+      payload.affected_count ??
+      detections.filter((d) => /affected|trichoderma|aspergillus|disease/i.test(d.className)).length,
+  );
+  const inferenceTimeMs = payload.inferenceTimeMs ?? payload.inference_time_ms ?? null;
+
+  return {
+    nodeId,
+    modelName,
+    healthyCount: Number.isFinite(healthyCount) ? healthyCount : 0,
+    affectedCount: Number.isFinite(affectedCount) ? affectedCount : 0,
+    diseaseDetected: Boolean(payload.diseaseDetected ?? payload.disease_detected ?? affectedCount > 0),
+    inferenceTimeMs: inferenceTimeMs === null ? null : Number(inferenceTimeMs),
+    imageUrl: payload.imageUrl || payload.image_url || null,
+    detections,
+    lastUpdated: nowIso(),
+  };
+}
+
+function applyDetection(payload) {
+  const detection = normalizeDetectionPayload(payload);
+  state.ai = detection;
+
+  if (detection.diseaseDetected) {
+    const alert = {
+      id: `ai-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      metric: 'ai',
+      severity: detection.affectedCount >= 2 ? 'critical' : 'warning',
+      title: 'AI phát hiện bệnh',
+      message: `Phát hiện ${detection.affectedCount} vùng nghi nhiễm bệnh từ mô hình ${detection.modelName}.`,
+      createdAt: detection.lastUpdated,
+    };
+    state.alerts = [alert, ...state.alerts].slice(0, 50);
+  }
+
+  persistDetection(detection).catch((error) => {
+    supabaseStatus.lastError = error.message;
+    console.error('[supabase] detection write failed:', error.message);
+  });
+  broadcast('ai.updated');
+  return detection;
+}
+
 async function getOrCreateDevice(nodeId) {
   if (!supabase) return null;
   if (deviceIdCache.has(nodeId)) return deviceIdCache.get(nodeId);
@@ -298,6 +380,56 @@ async function persistCommand(command) {
   });
 
   if (error) throw error;
+  supabaseStatus.lastError = null;
+  supabaseStatus.lastWriteAt = nowIso();
+}
+
+async function persistDetection(detection) {
+  if (!supabase) return;
+
+  const deviceId = await getOrCreateDevice(detection.nodeId);
+  const { data: image, error: imageError } = await supabase
+    .from('mushroom_images')
+    .insert({
+      device_id: deviceId,
+      image_url: detection.imageUrl || '',
+      captured_at: detection.lastUpdated,
+      created_at: detection.lastUpdated,
+    })
+    .select('id')
+    .single();
+
+  if (imageError) throw imageError;
+
+  if (detection.detections.length) {
+    const { error: detectionError } = await supabase.from('ai_detections').insert(
+      detection.detections.map((item) => ({
+        image_id: image.id,
+        model_name: detection.modelName,
+        class_name: item.className,
+        confidence: item.confidence,
+        bbox: item.bbox,
+        inference_time_ms: detection.inferenceTimeMs,
+        created_at: detection.lastUpdated,
+      })),
+    );
+
+    if (detectionError) throw detectionError;
+  }
+
+  if (detection.diseaseDetected) {
+    const { error: alertError } = await supabase.from('alerts').insert({
+      device_id: deviceId,
+      image_id: image.id,
+      alert_type: 'ai_detection',
+      message: `AI detected ${detection.affectedCount} affected mushroom region(s).`,
+      severity: detection.affectedCount >= 2 ? 'critical' : 'warning',
+      created_at: detection.lastUpdated,
+    });
+
+    if (alertError) throw alertError;
+  }
+
   supabaseStatus.lastError = null;
   supabaseStatus.lastWriteAt = nowIso();
 }
@@ -417,6 +549,19 @@ app.post('/api/telemetry', (req, res) => {
   try {
     applyTelemetry(req.body);
     return res.status(201).json({ ok: true, state: publicState() });
+  } catch (error) {
+    return res.status(400).json({ error: error.message });
+  }
+});
+
+app.get('/api/detections/latest', (_req, res) => {
+  res.json(state.ai);
+});
+
+app.post('/api/detections', (req, res) => {
+  try {
+    const detection = applyDetection(req.body);
+    return res.status(201).json({ ok: true, detection, state: publicState() });
   } catch (error) {
     return res.status(400).json({ error: error.message });
   }

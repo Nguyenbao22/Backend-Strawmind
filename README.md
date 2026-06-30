@@ -237,6 +237,74 @@ Body:
 
 Mỗi lệnh được lưu cùng topic MQTT dự kiến, ví dụ `strawmind/bed-01/cmd/fan`. Khi nối MQTT broker thật, ESP32 chỉ cần subscribe các topic này và bật relay tương ứng.
 
+## API nhận kết quả AI
+
+Raspberry Pi hoặc AI service có thể gửi kết quả nhận diện bệnh lên backend:
+
+```http
+POST /api/detections
+```
+
+Payload hỗ trợ cả format chuẩn và format gần giống code YOLO local:
+
+```json
+{
+  "nodeId": "bed-01",
+  "modelName": "YOLOv8n-ONNX-Pi",
+  "healthyCount": 1,
+  "affectedCount": 1,
+  "inferenceTimeMs": 410,
+  "imageUrl": "https://example.com/analyzed.jpg",
+  "detections": [
+    {
+      "className": "Affected Mushroom",
+      "confidence": 0.87,
+      "bbox": {
+        "x1": 120,
+        "y1": 80,
+        "x2": 260,
+        "y2": 190
+      }
+    }
+  ]
+}
+```
+
+Format từ code Pi cũ cũng dùng được:
+
+```json
+{
+  "boxes": [
+    {
+      "box": [120, 80, 260, 190],
+      "label": "Affected Mushroom",
+      "conf": 0.87
+    }
+  ],
+  "healthy_count": 1,
+  "affected_count": 1
+}
+```
+
+Lấy kết quả AI mới nhất:
+
+```http
+GET /api/detections/latest
+```
+
+Test giả lập AI local:
+
+```powershell
+npm.cmd run ai:sim
+```
+
+Test giả lập AI lên Render:
+
+```powershell
+$env:AI_API_URL="https://strawmind.onrender.com/api/detections"
+npm.cmd run ai:sim
+```
+
 ## Phạm vi đã cố tình bỏ qua
 
 Phần AI phát hiện bệnh qua ảnh/camera OV2640 chưa triển khai ở prototype này, đúng theo phân công là Quyên sẽ nghiên cứu riêng rồi gộp mô hình sau.

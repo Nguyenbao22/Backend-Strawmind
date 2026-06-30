@@ -1,9 +1,11 @@
 import {
   Bell,
+  BrainCircuit,
   Check,
   Fan,
   Gauge,
   History,
+  Image,
   Power,
   Radio,
   RefreshCw,
@@ -321,6 +323,45 @@ export function App() {
               </div>
             ) : (
               state.recommendedActions.map((action) => <p key={action}>{action}</p>)
+            )}
+          </div>
+        </div>
+
+        <div className="panel ai-panel">
+          <div className="panel-head">
+            <h2>AI phát hiện bệnh</h2>
+            <BrainCircuit size={18} />
+          </div>
+          <div className={`ai-status ${state.ai?.diseaseDetected ? 'danger' : 'ok'}`}>
+            <div>
+              <strong>{state.ai?.diseaseDetected ? 'Có dấu hiệu bệnh' : 'Chưa phát hiện bệnh'}</strong>
+              <span>
+                {state.ai?.modelName || 'YOLOv8n'} · {state.ai?.lastUpdated ? formatTime(state.ai.lastUpdated) : '--:--'}
+              </span>
+            </div>
+            <div className="ai-counts">
+              <span>{state.ai?.healthyCount ?? 0} healthy</span>
+              <span>{state.ai?.affectedCount ?? 0} affected</span>
+            </div>
+          </div>
+          {state.ai?.imageUrl ? (
+            <a className="ai-image-link" href={state.ai.imageUrl} target="_blank" rel="noreferrer">
+              <Image size={16} />
+              <span>Xem ảnh phân tích</span>
+            </a>
+          ) : null}
+          <div className="detection-list">
+            {state.ai?.detections?.length ? (
+              state.ai.detections.slice(0, 4).map((item, index) => (
+                <div className="detection" key={`${item.className}-${index}`}>
+                  <span>{item.className}</span>
+                  <strong>{Math.round((item.confidence || 0) * 100)}%</strong>
+                </div>
+              ))
+            ) : (
+              <div className="empty">
+                <span>Chưa có kết quả AI từ thiết bị.</span>
+              </div>
             )}
           </div>
         </div>

@@ -395,7 +395,8 @@ h2 {
 
 .alert-list,
 .action-list,
-.command-list {
+.command-list,
+.detection-list {
   display: grid;
   gap: 10px;
 }
@@ -403,6 +404,7 @@ h2 {
 .alert,
 .action-list p,
 .command,
+.detection,
 .empty {
   border-radius: 12px;
   background: var(--panel);
@@ -447,6 +449,74 @@ h2 {
 }
 
 .command strong {
+  color: var(--earth);
+}
+
+.ai-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.ai-status {
+  border-radius: 14px;
+  padding: 13px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px;
+  align-items: center;
+}
+
+.ai-status.ok {
+  background: #e8f0dc;
+  color: var(--earth);
+}
+
+.ai-status.danger {
+  background: #f4e0d9;
+  color: var(--clay);
+}
+
+.ai-status div {
+  display: grid;
+  gap: 4px;
+}
+
+.ai-status span,
+.ai-image-link {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.ai-counts {
+  justify-items: end;
+  font-weight: 900;
+}
+
+.ai-image-link {
+  min-height: 38px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  text-decoration: none;
+  font-weight: 900;
+}
+
+.detection {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.detection span {
+  color: var(--ink);
+  font-weight: 900;
+}
+
+.detection strong {
   color: var(--earth);
 }
 
